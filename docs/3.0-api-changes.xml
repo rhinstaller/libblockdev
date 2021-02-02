@@ -23,4 +23,54 @@
   </para>
 
   </simplesect>
+
+  <simplesect><title>Crypto plugin</title>
+
+  <para>
+    Crypto plugin API has been significantly changed. Most changes were introduced to simplify the API by removing various
+    "redundant" functions that added new or optional parameters to the existing functions.
+  </para>
+
+  <para>
+    `BD_CRYPTO_TECH_LUKS2` has been removed. We no longer distinguish between LUKS v1 and LUKS v2 support and libcryptsetup >= 2 is now required.
+  </para>
+
+  <para>
+    <literal>bd_crypto_luks_format_luks2</literal>, <literal>bd_crypto_luks_format_luks2_blob</literal> and <litera>bd_crypto_luks_format</litera>
+     have been removed, use <literal>bd_crypto_luks_format</literal> instead. This functions has been changed to match functionality of the
+     removed <literal>_luks2</literal> and <literal>_blob</literal> functions.
+  </para>
+
+  <para>
+    <literal>bd_crypto_luks_resize_luks2</literal>, <literal>bd_crypto_luks_resize_luks2_blob</literal> and  <literal>bd_crypto_luks_resize_blob</literal>
+    have been removed, use <literal>bd_crypto_luks_resize</literal> instead. This functions has been changed to match functionality of the
+     removed <literal>_luks2</literal> and <literal>_blob</literal> functions.
+  </para>
+
+  <para>
+    <literal>bd_crypto_luks_open_blob</literal> has been removed, use <literal>bd_crypto_luks_open</literal> instead. This functions has
+    been changed to match functionality of the removed <literal>_blob</literal> function.
+  </para>
+
+  <para>
+    <literal>bd_crypto_add_key_blob</literal> has been removed, use <literal>bd_crypto_add_key</literal> instead. This functions has
+    been changed to match functionality of the removed <literal>_blob</literal> function.
+  </para>
+
+  <para>
+    <literal>bd_crypto_remove_key_blob</literal> has been removed, use <literal>bd_crypto_remove_key</literal> instead. This functions has
+    been changed to match functionality of the removed <literal>_blob</literal> function.
+  </para>
+
+  <para>
+    <literal>bd_crypto_change_key_blob</literal> has been removed, use <literal>bd_crypto_change_key</literal> instead. This functions has
+    been changed to match functionality of the removed <literal>_blob</literal> function.
+  </para>
+
+  <para>
+    <literal>bd_crypto_resume_blob</literal> has been removed, use <literal>bd_crypto_resume</literal> instead. This functions has
+    been changed to match functionality of the removed <literal>_blob</literal> function.
+  </para>
+
+  </simplesect>
 </chapter>

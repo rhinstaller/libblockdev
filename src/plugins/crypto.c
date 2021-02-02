@@ -319,21 +319,6 @@ gboolean bd_crypto_is_tech_avail (BDCryptoTech tech, guint64 mode, GError **erro
                 return FALSE;
             } else
                 return TRUE;
-        case BD_CRYPTO_TECH_LUKS2:
-#ifndef LIBCRYPTSETUP_2
-            g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
-                         "LUKS 2 technology requires libcryptsetup >= 2.0");
-            return FALSE;
-#endif
-            ret = mode & (BD_CRYPTO_TECH_MODE_CREATE|BD_CRYPTO_TECH_MODE_OPEN_CLOSE|BD_CRYPTO_TECH_MODE_QUERY|
-                          BD_CRYPTO_TECH_MODE_ADD_KEY|BD_CRYPTO_TECH_MODE_REMOVE_KEY|BD_CRYPTO_TECH_MODE_RESIZE|
-                          BD_CRYPTO_TECH_MODE_SUSPEND_RESUME|BD_CRYPTO_TECH_MODE_BACKUP_RESTORE);
-            if (ret != mode) {
-                g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
-                             "Only 'create', 'open', 'query', 'add-key', 'remove-key', 'resize', 'suspend-resume', 'backup-restore' supported for LUKS 2");
-                return FALSE;
-            } else
-                return TRUE;
         case BD_CRYPTO_TECH_TRUECRYPT:
             ret = mode & BD_CRYPTO_TECH_MODE_OPEN_CLOSE;
             if (ret != mode) {
@@ -356,11 +341,6 @@ gboolean bd_crypto_is_tech_avail (BDCryptoTech tech, guint64 mode, GError **erro
             } else
                 return TRUE;
         case BD_CRYPTO_TECH_INTEGRITY:
-#ifndef LIBCRYPTSETUP_2
-            g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
-                         "Integrity technology requires libcryptsetup >= 2.0");
-            return FALSE;
-#endif
             ret = mode & (BD_CRYPTO_TECH_MODE_QUERY);
             if (ret != mode) {
                 g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
@@ -670,7 +650,6 @@ gchar* bd_crypto_luks_status (const gchar *luks_device, GError **error) {
     return (gchar *)ret;
 }
 
-#ifdef LIBCRYPTSETUP_2
 static struct crypt_pbkdf_type *get_pbkdf_params (BDCryptoLUKSPBKDF *user_pbkdf, GError **error) {
     const struct crypt_pbkdf_type *default_pbkdf = NULL;
     struct crypt_pbkdf_type *new_pbkdf = NULL;
@@ -739,9 +718,34 @@ static struct crypt_pbkdf_type *get_pbkdf_params (BDCryptoLUKSPBKDF *user_pbkdf,
 
     return new_pbkdf;
 }
-#endif
 
-static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 key_size, const guint8 *pass_data, gsize data_size, const gchar *key_file, guint64 min_entropy, BDCryptoLUKSVersion luks_version, BDCryptoLUKSExtra *extra, GError **error) {
+/**
+ * bd_crypto_luks_format:
+ * @device: a device to format as LUKS
+ * @cipher: (allow-none): cipher specification (type-mode, e.g. "aes-xts-plain64") or %NULL to use the default
+ * @key_size: size of the volume key in bits or 0 to use the default
+ * @pass_data: (array length=data_len) (allow-none): a passphrase for the new LUKS device (may contain arbitrary binary data)
+ * @data_len: length of the @pass_data buffer
+ * @key_file: (allow-none): a key file for the new LUKS device or `NULL`.
+ * @min_entropy: minimum random data entropy (in bits) required to format @device as LUKS
+ * @luks_version: whether to use LUKS v1 or LUKS v2
+ * @extra: (allow-none): extra arguments for LUKS format creation
+ * @error: (out): place to store error (if any)
+ *
+ * Formats the given @device as LUKS according to the other parameters given. If
+ * @min_entropy is specified (greater than 0), the function waits for enough
+ * entropy to be available in the random data pool (WHICH MAY POTENTIALLY TAKE
+ * FOREVER).
+ *
+ * Note: At least one of @pass_data and @key_file must be specified. If you specify both,
+ * two keyslots will be added.
+ *
+ * Returns: whether the given @device was successfully formatted as LUKS or not
+ * (the @error) contains the error in such cases)
+ *
+ * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_CREATE
+ */
+gboolean bd_crypto_luks_format (const gchar *device, const gchar *cipher, guint64 key_size, const guint8 *pass_data, gsize data_len, const gchar *key_file, guint64 min_entropy, BDCryptoLUKSVersion luks_version, BDCryptoLUKSExtra *extra, GError **error) {
     struct crypt_device *cd = NULL;
     gint ret;
     gchar **cipher_specs = NULL;
@@ -760,10 +764,8 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
 
     if (luks_version == BD_CRYPTO_LUKS_VERSION_LUKS1)
         crypt_version = CRYPT_LUKS1;
-#ifdef LIBCRYPTSETUP_2
     else if (luks_version == BD_CRYPTO_LUKS_VERSION_LUKS2)
         crypt_version = CRYPT_LUKS2;
-#endif
     else {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
                      "Unknown or unsupported LUKS version specified");
@@ -771,7 +773,7 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
         return FALSE;
     }
 
-    if ((data_size == 0) && !key_file) {
+    if ((data_len == 0) && !key_file) {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_NO_KEY,
                      "At least one of passphrase and key file have to be specified!");
         bd_utils_report_finished (progress_id, (*error)->message);
@@ -839,9 +841,7 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
             params.data_device = extra->data_device;
             ret = crypt_format (cd, crypt_version, cipher_specs[0], cipher_specs[1],
                                 NULL, NULL, key_size, &params);
-        }
-#ifdef LIBCRYPTSETUP_2
-        else if (luks_version == BD_CRYPTO_LUKS_VERSION_LUKS2) {
+        } else if (luks_version == BD_CRYPTO_LUKS_VERSION_LUKS2) {
             GError *loc_error = NULL;
             struct crypt_params_luks2 params = ZERO_INIT;
             struct crypt_pbkdf_type *pbkdf = get_pbkdf_params (extra->pbkdf, &loc_error);
@@ -867,7 +867,6 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
                                 NULL, NULL, key_size, &params);
             g_free (pbkdf);
         }
-#endif
     } else
         ret = crypt_format (cd, crypt_version, cipher_specs[0], cipher_specs[1],
                             NULL, NULL, key_size, NULL);
@@ -881,10 +880,10 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
         return FALSE;
     }
 
-    bd_utils_report_progress (progress_id, ((data_size != 0) && key_file) ? 40 : 50, "Format created");
-    if (data_size != 0) {
+    bd_utils_report_progress (progress_id, ((data_len != 0) && key_file) ? 40 : 50, "Format created");
+    if (data_len != 0) {
         ret = crypt_keyslot_add_by_volume_key (cd, CRYPT_ANY_SLOT, NULL, 0,
-                                               (const char*) pass_data, data_size);
+                                               (const char*) pass_data, data_len);
         if (ret < 0) {
             g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_ADD_KEY,
                          "Failed to add passphrase: %s", strerror_l(-ret, c_locale));
@@ -892,7 +891,7 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
             bd_utils_report_finished (progress_id, (*error)->message);
             return FALSE;
         }
-        bd_utils_report_progress (progress_id, ((data_size != 0) && key_file) ? 70 : 100, "Added key");
+        bd_utils_report_progress (progress_id, ((data_len != 0) && key_file) ? 70 : 100, "Added key");
     }
 
     if (key_file) {
@@ -922,116 +921,22 @@ static gboolean luks_format (const gchar *device, const gchar *cipher, guint64 k
 }
 
 /**
- * bd_crypto_luks_format:
- * @device: a device to format as LUKS
- * @cipher: (allow-none): cipher specification (type-mode, e.g. "aes-xts-plain64") or %NULL to use the default
- * @key_size: size of the volume key in bits or 0 to use the default
- * @passphrase: (allow-none): a passphrase for the new LUKS device or %NULL if not requested
- * @key_file: (allow-none): a key file for the new LUKS device or %NULL if not requested
- * @min_entropy: minimum random data entropy (in bits) required to format @device as LUKS
+ * bd_crypto_luks_open:
+ * @device: the device to open
+ * @name: name for the LUKS device
+ * @pass_data: (allow-none): a passphrase for the new LUKS device (may contain arbitrary binary data) or %NULL
+ * @data_len: (array length=data_len) (allow-none): length of the @pass_data buffer
+ * @key_file: (allow-none): key file path to use for opening the @device or %NULL
+ * @read_only: whether to open as read-only or not (meaning read-write)
  * @error: (out): place to store error (if any)
  *
- * Formats the given @device as LUKS according to the other parameters given. If
- * @min_entropy is specified (greater than 0), the function waits for enough
- * entropy to be available in the random data pool (WHICH MAY POTENTIALLY TAKE
- * FOREVER).
+ * Returns: whether the @device was successfully opened or not
  *
- * Either @passphrase or @key_file has to be != %NULL.
+ * One of @pass_data, @key_file has to be != %NULL.
  *
- * Returns: whether the given @device was successfully formatted as LUKS or not
- * (the @error) contains the error in such cases)
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_CREATE
+ * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_OPEN_CLOSE
  */
-gboolean bd_crypto_luks_format (const gchar *device, const gchar *cipher, guint64 key_size, const gchar *passphrase, const gchar *key_file, guint64 min_entropy, GError **error) {
-    return luks_format (device, cipher, key_size, (const guint8*) passphrase, passphrase ? strlen(passphrase) : 0, key_file, min_entropy, BD_CRYPTO_LUKS_VERSION_LUKS1, NULL, error);
-}
-
-/**
- * bd_crypto_luks_format_blob:
- * @device: a device to format as LUKS
- * @cipher: (allow-none): cipher specification (type-mode, e.g. "aes-xts-plain64") or %NULL to use the default
- * @key_size: size of the volume key in bits or 0 to use the default
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
- * @data_len: (allow-none): length of the @pass_data buffer
- * @min_entropy: minimum random data entropy (in bits) required to format @device as LUKS
- * @error: (out): place to store error (if any)
- *
- * Formats the given @device as LUKS according to the other parameters given. If
- * @min_entropy is specified (greater than 0), the function waits for enough
- * entropy to be available in the random data pool (WHICH MAY POTENTIALLY TAKE
- * FOREVER).
- *
- * Returns: whether the given @device was successfully formatted as LUKS or not
- * (the @error) contains the error in such cases)
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_CREATE
- */
-gboolean bd_crypto_luks_format_blob (const gchar *device, const gchar *cipher, guint64 key_size, const guint8 *pass_data, gsize data_len, guint64 min_entropy, GError **error) {
-    return luks_format (device, cipher, key_size, pass_data, data_len, NULL, min_entropy, BD_CRYPTO_LUKS_VERSION_LUKS1, NULL, error);
-}
-
-/**
- * bd_crypto_luks_format_luks2:
- * @device: a device to format as LUKS
- * @cipher: (allow-none): cipher specification (type-mode, e.g. "aes-xts-plain64") or %NULL to use the default
- * @key_size: size of the volume key in bits or 0 to use the default
- * @passphrase: (allow-none): a passphrase for the new LUKS device or %NULL if not requested
- * @key_file: (allow-none): a key file for the new LUKS device or %NULL if not requested
- * @min_entropy: minimum random data entropy (in bits) required to format @device as LUKS
- * @luks_version: whether to use LUKS v1 or LUKS v2
- * @extra: (allow-none): extra arguments for LUKS format creation
- * @error: (out): place to store error (if any)
- *
- * Formats the given @device as LUKS according to the other parameters given. If
- * @min_entropy is specified (greater than 0), the function waits for enough
- * entropy to be available in the random data pool (WHICH MAY POTENTIALLY TAKE
- * FOREVER).
- *
- * Either @passphrase or @key_file has to be != %NULL.
- *
- * Using this function with @luks_version set to %BD_CRYPTO_LUKS_VERSION_LUKS1 and
- * @extra to %NULL is the same as calling %bd_crypto_luks_format.
- *
- * Returns: whether the given @device was successfully formatted as LUKS or not
- * (the @error) contains the error in such cases)
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS2-%BD_CRYPTO_TECH_MODE_CREATE
- */
-gboolean bd_crypto_luks_format_luks2 (const gchar *device, const gchar *cipher, guint64 key_size, const gchar *passphrase, const gchar *key_file, guint64 min_entropy, BDCryptoLUKSVersion luks_version, BDCryptoLUKSExtra *extra,GError **error) {
-    return luks_format (device, cipher, key_size, (const guint8*) passphrase, passphrase ? strlen(passphrase) : 0, key_file, min_entropy, luks_version, extra, error);
-}
-
-/**
- * bd_crypto_luks_format_luks2_blob:
- * @device: a device to format as LUKS
- * @cipher: (allow-none): cipher specification (type-mode, e.g. "aes-xts-plain64") or %NULL to use the default
- * @key_size: size of the volume key in bits or 0 to use the default
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
- * @data_len: length of the @pass_data buffer
- * @min_entropy: minimum random data entropy (in bits) required to format @device as LUKS
- * @luks_version: whether to use LUKS v1 or LUKS v2
- * @extra: (allow-none): extra arguments for LUKS format creation
- * @error: (out): place to store error (if any)
- *
- * Formats the given @device as LUKS according to the other parameters given. If
- * @min_entropy is specified (greater than 0), the function waits for enough
- * entropy to be available in the random data pool (WHICH MAY POTENTIALLY TAKE
- * FOREVER).
- *
- * Using this function with @luks_version set to %BD_CRYPTO_LUKS_VERSION_LUKS1 and
- * @extra to %NULL is the same as calling %bd_crypto_luks_format_blob.
- *
- * Returns: whether the given @device was successfully formatted as LUKS or not
- * (the @error) contains the error in such cases)
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS2-%BD_CRYPTO_TECH_MODE_CREATE
- */
-gboolean bd_crypto_luks_format_luks2_blob (const gchar *device, const gchar *cipher, guint64 key_size, const guint8 *pass_data, gsize data_len, guint64 min_entropy, BDCryptoLUKSVersion luks_version, BDCryptoLUKSExtra *extra, GError **error) {
-    return luks_format (device, cipher, key_size, pass_data, data_len, NULL, min_entropy, luks_version, extra, error);
-}
-
-static gboolean luks_open (const gchar *device, const gchar *name, const guint8 *pass_data, gsize data_len, const gchar *key_file, gboolean read_only, GError **error) {
+gboolean bd_crypto_luks_open (const gchar *device, const gchar *name, const guint8 *pass_data, gsize data_len, const gchar *key_file, gboolean read_only, GError **error) {
     struct crypt_device *cd = NULL;
     gboolean success = FALSE;
     gchar *key_buffer = NULL;
@@ -1099,42 +1004,6 @@ static gboolean luks_open (const gchar *device, const gchar *name, const guint8 
     crypt_free (cd);
     bd_utils_report_finished (progress_id, "Completed");
     return TRUE;
-}
-
-/**
- * bd_crypto_luks_open:
- * @device: the device to open
- * @name: name for the LUKS device
- * @passphrase: (allow-none): passphrase to open the @device or %NULL
- * @key_file: (allow-none): key file path to use for opening the @device or %NULL
- * @read_only: whether to open as read-only or not (meaning read-write)
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @device was successfully opened or not
- *
- * One of @passphrase, @key_file has to be != %NULL.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_OPEN_CLOSE
- */
-gboolean bd_crypto_luks_open (const gchar *device, const gchar *name, const gchar *passphrase, const gchar *key_file, gboolean read_only, GError **error) {
-    return luks_open (device, name, (const guint8*) passphrase, passphrase ? strlen (passphrase) : 0, key_file, read_only, error);
-}
-
-/**
- * bd_crypto_luks_open_blob:
- * @device: the device to open
- * @name: name for the LUKS device
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
- * @data_len: length of the @pass_data buffer
- * @read_only: whether to open as read-only or not (meaning read-write)
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @device was successfully opened or not
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_OPEN_CLOSE
- */
-gboolean bd_crypto_luks_open_blob (const gchar *device, const gchar *name, const guint8* pass_data, gsize data_len, gboolean read_only, GError **error) {
-    return luks_open (device, name, (const guint8*) pass_data, data_len, NULL, read_only, error);
 }
 
 /**
@@ -1246,152 +1115,57 @@ gboolean bd_crypto_luks_close (const gchar *luks_device, GError **error) {
 }
 
 /**
- * bd_crypto_luks_add_key_blob:
+ * bd_crypto_luks_add_key:
  * @device: device to add new key to
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
+ * @pass_data: (allow-none) (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data) or %NULL
  * @data_len: length of the @pass_data buffer
+ * @key_file: (allow-none): key file for the @device or %NULL
  * @npass_data: (array length=ndata_len): a new passphrase for the new LUKS device (may contain arbitrary binary data)
  * @ndata_len: length of the @npass_data buffer
+ * @nkey_file: (allow-none): key file to add to @device or %NULL
  * @error: (out): place to store error (if any)
  *
- * Returns: whether the @npass_data was successfully added to @device or not
+ * At least one of @pass_data and @key_file must be specified.
+ * At least one of @npass_data and @nkey_file must be specified. If you specify both,
+ * two keyslots will be added.
+ *
+ * Returns: whether the @npass_data and/or @nkey_filedata was successfully added to @device or not
  *
  * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_ADD_KEY
  */
-gboolean bd_crypto_luks_add_key_blob (const gchar *device, const guint8 *pass_data, gsize data_len, const guint8 *npass_data, gsize ndata_len, GError **error) {
+gboolean bd_crypto_luks_add_key (const gchar *device, const guint8 *pass_data, gsize data_len, const gchar *key_file, const guint8 *npass_data, gsize ndata_len, const gchar *nkey_file, GError **error) {
     struct crypt_device *cd = NULL;
     gint ret = 0;
     guint64 progress_id = 0;
     gchar *msg = NULL;
-
-    msg = g_strdup_printf ("Started adding key to the LUKS device '%s'", device);
-    progress_id = bd_utils_report_started (msg);
-    g_free (msg);
-
-    ret = crypt_init (&cd, device);
-    if (ret != 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
-                     "Failed to initialize device: %s", strerror_l(-ret, c_locale));
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
-    }
-
-    ret = crypt_load (cd, CRYPT_LUKS, NULL);
-    if (ret != 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
-                     "Failed to load device's parameters: %s", strerror_l(-ret, c_locale));
-        crypt_free (cd);
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
-    }
-
-    ret = crypt_keyslot_add_by_passphrase (cd, CRYPT_ANY_SLOT, (char*) pass_data, data_len, (char*) npass_data, ndata_len);
-
-    if (ret < 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_ADD_KEY,
-                     "Failed to add key: %s", strerror_l(-ret, c_locale));
-        crypt_free (cd);
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
-    }
-
-    crypt_free (cd);
-    bd_utils_report_finished (progress_id, "Completed");
-    return TRUE;
-}
-
-/**
- * bd_crypto_luks_add_key:
- * @device: device to add new key to
- * @pass: (allow-none): passphrase for the @device or %NULL
- * @key_file: (allow-none): key file for the @device or %NULL
- * @npass: (allow-none): passphrase to add to @device or %NULL
- * @nkey_file: (allow-none): key file to add to @device or %NULL
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @npass or @nkey_file was successfully added to @device
- * or not
- *
- * One of @pass, @key_file has to be != %NULL and the same applies to @npass,
- * @nkey_file.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_ADD_KEY
- */
-gboolean bd_crypto_luks_add_key (const gchar *device, const gchar *pass, const gchar *key_file, const gchar *npass, const gchar *nkey_file, GError **error) {
     gboolean success = FALSE;
     gchar *key_buf = NULL;
     gsize buf_len = 0;
     gchar *nkey_buf = NULL;
     gsize nbuf_len = 0;
 
-    if (!pass && !key_file) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_NO_KEY,
-                     "No passphrase nor key file given, cannot add key.");
-        return FALSE;
-    }
-
-    if (!npass && !nkey_file) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_NO_KEY,
-                     "No new passphrase nor key file given, nothing to add.");
-        return FALSE;
-    }
-
-    if (key_file) {
-        success = g_file_get_contents (key_file, &key_buf, &buf_len, error);
-        if (!success) {
-            g_prefix_error (error, "Failed to load key from file '%s': ", key_file);
-            return FALSE;
-        }
-    } else
-        buf_len = strlen (pass);
-
-    if (nkey_file) {
-        success = g_file_get_contents (nkey_file, &nkey_buf, &nbuf_len, error);
-        if (!success) {
-            g_prefix_error (error, "Failed to load key from file '%s': ", nkey_file);
-            g_free (key_buf);
-            return FALSE;
-        }
-    } else
-        nbuf_len = strlen (npass);
-
-    success = bd_crypto_luks_add_key_blob (device,
-                                           key_buf ? (const guint8*) key_buf : (const guint8*) pass, buf_len,
-                                           nkey_buf ? (const guint8*) nkey_buf : (const guint8*) npass, nbuf_len,
-                                           error);
-    g_free (key_buf);
-    g_free (nkey_buf);
-
-    return success;
-}
-
-/**
- * bd_crypto_luks_remove_key_blob:
- * @device: device to add new key to
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data) to remove
- * @data_len: length of the @pass_data buffer
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the key was successfully removed or not
- *
- * Either @pass or @key_file has to be != %NULL.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_REMOVE_KEY
- */
-gboolean bd_crypto_luks_remove_key_blob (const gchar *device, const guint8 *pass_data, gsize data_len, GError **error) {
-    struct crypt_device *cd = NULL;
-    gint ret = 0;
-    guint64 progress_id = 0;
-    gchar *msg = NULL;
-
-    msg = g_strdup_printf ("Started removing key from the LUKS device '%s'", device);
+    msg = g_strdup_printf ("Started adding key to the LUKS device '%s'", device);
     progress_id = bd_utils_report_started (msg);
     g_free (msg);
+
+    if ((data_len == 0) && !key_file) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_NO_KEY,
+                     "At least one of passphrase and key file have to be specified!");
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
+
+    if ((ndata_len == 0) && !nkey_file) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_NO_KEY,
+                     "No new passphrase nor key file given, nothing to add.");
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
 
     ret = crypt_init (&cd, device);
     if (ret != 0) {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
-                     "Failed to initialize device: %s", strerror_l(-ret, c_locale));
+                     "Failed to initialize device: %s", strerror_l (-ret, c_locale));
         bd_utils_report_finished (progress_id, (*error)->message);
         return FALSE;
     }
@@ -1399,30 +1173,64 @@ gboolean bd_crypto_luks_remove_key_blob (const gchar *device, const guint8 *pass
     ret = crypt_load (cd, CRYPT_LUKS, NULL);
     if (ret != 0) {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
-                     "Failed to load device's parameters: %s", strerror_l(-ret, c_locale));
+                     "Failed to load device's parameters: %s", strerror_l (-ret, c_locale));
         crypt_free (cd);
         bd_utils_report_finished (progress_id, (*error)->message);
         return FALSE;
     }
 
-    ret = crypt_activate_by_passphrase (cd, NULL, CRYPT_ANY_SLOT, (char*) pass_data, data_len, 0);
-    if (ret < 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_KEY_SLOT,
-                     "Failed to determine key slot: %s", strerror_l(-ret, c_locale));
-        crypt_free (cd);
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
+    if (key_file) {
+        success = g_file_get_contents (key_file, &key_buf, &buf_len, error);
+        if (!success) {
+            g_prefix_error (error, "Failed to add key file: %s", strerror_l (-ret, c_locale));
+            crypt_free (cd);
+            bd_utils_report_finished (progress_id, (*error)->message);
+            return FALSE;
+        }
+    } else
+        buf_len = data_len;
+
+    if (nkey_file) {
+        success = g_file_get_contents (nkey_file, &nkey_buf, &nbuf_len, error);
+        if (!success) {
+            g_prefix_error (error, "Failed to add key file: %s", strerror_l (-ret, c_locale));
+            g_free (key_buf);
+            crypt_free (cd);
+            bd_utils_report_finished (progress_id, (*error)->message);
+            return FALSE;
+        }
+
+        ret = crypt_keyslot_add_by_passphrase (cd, CRYPT_ANY_SLOT,
+                                               key_buf ? key_buf : (char*) pass_data, buf_len,
+                                               (char*) nkey_buf, nbuf_len);
+        if (ret < 0) {
+            g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_ADD_KEY,
+                        "Failed to add key: %s", strerror_l (-ret, c_locale));
+            g_free (key_buf);
+            g_free (nkey_buf);
+            crypt_free (cd);
+            bd_utils_report_finished (progress_id, (*error)->message);
+            return FALSE;
+        }
+
+        g_free (nkey_buf);
     }
 
-    ret = crypt_keyslot_destroy (cd, ret);
-    if (ret != 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_REMOVE_KEY,
-                     "Failed to remove key: %s", strerror_l(-ret, c_locale));
-        crypt_free (cd);
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
+    if (ndata_len != 0) {
+        ret = crypt_keyslot_add_by_passphrase (cd, CRYPT_ANY_SLOT,
+                                               key_buf ? key_buf : (char*) pass_data, buf_len,
+                                               (char*) npass_data, ndata_len);
+        if (ret < 0) {
+            g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_ADD_KEY,
+                        "Failed to add key: %s", strerror_l (-ret, c_locale));
+            g_free (key_buf);
+            crypt_free (cd);
+            bd_utils_report_finished (progress_id, (*error)->message);
+            return FALSE;
+        }
     }
 
+    g_free (key_buf);
     crypt_free (cd);
     bd_utils_report_finished (progress_id, "Completed");
     return TRUE;
@@ -1431,8 +1239,9 @@ gboolean bd_crypto_luks_remove_key_blob (const gchar *device, const guint8 *pass
 /**
  * bd_crypto_luks_remove_key:
  * @device: device to add new key to
- * @pass: (allow-none): passphrase for the @device or %NULL
- * @key_file: (allow-none): key file for the @device or %NULL
+ * @pass_data: (array length=data_len) (allow-none): a passphrase for the new LUKS device (may contain arbitrary binary data) to remove
+ * @data_len: length of the @pass_data buffer
+ * @key_file: (allow-none): key file for the @device to remove or %NULL
  * @error: (out): place to store error (if any)
  *
  * Returns: whether the key was successfully removed or not
@@ -1441,12 +1250,20 @@ gboolean bd_crypto_luks_remove_key_blob (const gchar *device, const guint8 *pass
  *
  * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_REMOVE_KEY
  */
-gboolean bd_crypto_luks_remove_key (const gchar *device, const gchar *pass, const gchar *key_file, GError **error) {
+gboolean bd_crypto_luks_remove_key (const gchar *device, const guint8 *pass_data, gsize data_len, const gchar *key_file, GError **error) {
+    struct crypt_device *cd = NULL;
+    gint ret = 0;
+    guint64 progress_id = 0;
+    gchar *msg = NULL;
     gboolean success = FALSE;
     gchar *key_buf = NULL;
     gsize buf_len = 0;
 
-    if (!pass && !key_file) {
+    msg = g_strdup_printf ("Started removing key from the LUKS device '%s'", device);
+    progress_id = bd_utils_report_started (msg);
+    g_free (msg);
+
+    if ((data_len == 0) && !key_file) {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_REMOVE_KEY,
                      "No passphrase nor key file given, cannot remove key.");
         return FALSE;
@@ -1459,16 +1276,54 @@ gboolean bd_crypto_luks_remove_key (const gchar *device, const gchar *pass, cons
             return FALSE;
         }
     } else
-        buf_len = strlen (pass);
+        buf_len = data_len;
 
-    success = bd_crypto_luks_remove_key_blob (device, key_buf ? (const guint8*) key_buf : (const guint8*) pass, buf_len, error);
+    ret = crypt_init (&cd, device);
+    if (ret != 0) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
+                     "Failed to initialize device: %s", strerror_l (-ret, c_locale));
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
+
+    ret = crypt_load (cd, CRYPT_LUKS, NULL);
+    if (ret != 0) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_DEVICE,
+                     "Failed to load device's parameters: %s", strerror_l (-ret, c_locale));
+        crypt_free (cd);
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
+
+    ret = crypt_activate_by_passphrase (cd, NULL, CRYPT_ANY_SLOT,
+                                        key_buf ? key_buf : (char*) pass_data, buf_len, 0);
+    if (ret < 0) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_KEY_SLOT,
+                     "Failed to determine key slot: %s", strerror_l (-ret, c_locale));
+        g_free (key_buf);
+        crypt_free (cd);
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
+
     g_free (key_buf);
 
-    return success;
+    ret = crypt_keyslot_destroy (cd, ret);
+    if (ret != 0) {
+        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_REMOVE_KEY,
+                     "Failed to remove key: %s", strerror_l (-ret, c_locale));
+        crypt_free (cd);
+        bd_utils_report_finished (progress_id, (*error)->message);
+        return FALSE;
+    }
+
+    crypt_free (cd);
+    bd_utils_report_finished (progress_id, "Completed");
+    return TRUE;
 }
 
 /**
- * bd_crypto_luks_change_key_blob:
+ * bd_crypto_luks_change_key:
  * @device: device to change key of
  * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
  * @data_len: length of the @pass_data buffer
@@ -1480,7 +1335,7 @@ gboolean bd_crypto_luks_remove_key (const gchar *device, const gchar *pass, cons
  *
  * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_ADD_KEY&%BD_CRYPTO_TECH_MODE_REMOVE_KEY
  */
-gboolean bd_crypto_luks_change_key_blob (const gchar *device, const guint8 *pass_data, gsize data_len, const guint8 *npass_data, gsize ndata_len, GError **error) {
+gboolean bd_crypto_luks_change_key (const gchar *device, const guint8 *pass_data, gsize data_len, const guint8 *npass_data, gsize ndata_len, GError **error) {
     struct crypt_device *cd = NULL;
     gint ret = 0;
     guint64 progress_id = 0;
@@ -1528,23 +1383,22 @@ gboolean bd_crypto_luks_change_key_blob (const gchar *device, const guint8 *pass
 }
 
 /**
- * bd_crypto_luks_change_key:
- * @device: device to change key of
- * @pass: old passphrase
- * @npass: new passphrase
+ * bd_crypto_luks_resize:
+ * @luks_device: opened LUKS device to resize
+ * @pass_data: (array length=data_len) (allow-none): passphrase to resize the @luks_device or %NULL (may contain arbitrary binary data)
+ * @data_len: length of the @pass_data buffer
+ * @key_file: (allow-none): key file path to use for resizing the @luks_device or %NULL
+ * @size: requested size in sectors or 0 to adapt to the backing device
  * @error: (out): place to store error (if any)
  *
- * Returns: whether the key was successfully changed or not
+ * Returns: whether the @luks_device was successfully resized or not
  *
- * No support for changing key files (yet).
+ * You need to specify @pass_data for LUKS 2 devices that don't have
+ * verified key loaded in kernel.
  *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_ADD_KEY&%BD_CRYPTO_TECH_MODE_REMOVE_KEY
+ * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_RESIZE
  */
-gboolean bd_crypto_luks_change_key (const gchar *device, const gchar *pass, const gchar *npass, GError **error) {
-    return bd_crypto_luks_change_key_blob (device, (guint8*) pass, strlen (pass), (guint8*) npass, strlen (npass), error);
-}
-
-static gboolean luks_resize (const gchar *luks_device, guint64 size, const guint8 *pass_data, gsize data_len, const gchar *key_file, GError **error) {
+gboolean bd_crypto_luks_resize (const gchar *luks_device, guint64 size, const guint8* pass_data, gsize data_len, const gchar *key_file, GError **error) {
     struct crypt_device *cd = NULL;
     struct crypt_active_device cad;
     gint ret = 0;
@@ -1588,15 +1442,9 @@ static gboolean luks_resize (const gchar *luks_device, guint64 size, const guint
         } else
             buf_len = data_len;
 
-#ifdef LIBCRYPTSETUP_2
         ret = crypt_activate_by_passphrase (cd, NULL, CRYPT_ANY_SLOT,
                                             key_buffer ? key_buffer : (char*) pass_data,
                                             buf_len, cad.flags & CRYPT_ACTIVATE_KEYRING_KEY);
-#else
-        ret = crypt_activate_by_passphrase (cd, NULL, CRYPT_ANY_SLOT,
-                                            key_buffer ? key_buffer : (char*) pass_data,
-                                            buf_len, 0);
-#endif
         g_free (key_buffer);
 
         if (ret < 0) {
@@ -1614,7 +1462,6 @@ static gboolean luks_resize (const gchar *luks_device, guint64 size, const guint
 
     ret = crypt_resize (cd, luks_device, size);
     if (ret != 0) {
-#ifdef LIBCRYPTSETUP_2
         if (ret == -EPERM && g_strcmp0 (crypt_get_type (cd), CRYPT_LUKS2) == 0) {
             g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_RESIZE_PERM,
                          "Insufficient permissions to resize device. You need to specify"
@@ -1625,7 +1472,6 @@ static gboolean luks_resize (const gchar *luks_device, guint64 size, const guint
             return FALSE;
 
         }
-#endif
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_RESIZE_FAILED,
                      "Failed to resize device: %s", strerror_l(-ret, c_locale));
         crypt_free (cd);
@@ -1636,66 +1482,6 @@ static gboolean luks_resize (const gchar *luks_device, guint64 size, const guint
     crypt_free (cd);
     bd_utils_report_finished (progress_id, "Completed");
     return TRUE;
-}
-
-
-/**
- * bd_crypto_luks_resize:
- * @luks_device: opened LUKS device to resize
- * @size: requested size in sectors or 0 to adapt to the backing device
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @luks_device was successfully resized or not
- *
- * You need to specify passphrase when resizing LUKS 2 devices that don't have
- * verified key loaded in kernel. If you don't specify a passphrase, resize
- * will fail with %BD_CRYPTO_ERROR_RESIZE_PERM. Use %bd_crypto_luks_resize_luks2
- * or %bd_crypto_luks_resize_luks2_blob for these devices.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_RESIZE
- */
-gboolean bd_crypto_luks_resize (const gchar *luks_device, guint64 size, GError **error) {
-    return luks_resize (luks_device, size, NULL, 0, NULL, error);
-}
-
-/**
- * bd_crypto_luks_resize_luks2:
- * @luks_device: opened LUKS device to resize
- * @passphrase: (allow-none): passphrase to resize the @luks_device or %NULL
- * @key_file: (allow-none): key file path to use for resizing the @luks_device or %NULL
- * @size: requested size in sectors or 0 to adapt to the backing device
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @luks_device was successfully resized or not
- *
- * You need to specify either @passphrase or @keyfile for LUKS 2 devices that
- * don't have verified key loaded in kernel.
- * For LUKS 1 devices you can set both @passphrase and @keyfile to %NULL to
- * achieve the same as calling %bd_crypto_luks_resize.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS2-%BD_CRYPTO_TECH_MODE_RESIZE
- */
-gboolean bd_crypto_luks_resize_luks2 (const gchar *luks_device, guint64 size, const gchar *passphrase, const gchar *key_file, GError **error) {
-    return luks_resize (luks_device, size, (const guint8*) passphrase, passphrase ? strlen (passphrase) : 0, key_file, error);
-}
-
-/**
- * bd_crypto_luks_resize_luks2_blob:
- * @luks_device: opened LUKS device to resize
- * @pass_data: (array length=data_len): a passphrase for the new LUKS device (may contain arbitrary binary data)
- * @data_len: length of the @pass_data buffer
- * @size: requested size in sectors or 0 to adapt to the backing device
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the @luks_device was successfully resized or not
- *
- * You need to specify @pass_data for LUKS 2 devices that don't have
- * verified key loaded in kernel.
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS2-%BD_CRYPTO_TECH_MODE_RESIZE
- */
-gboolean bd_crypto_luks_resize_luks2_blob (const gchar *luks_device, guint64 size, const guint8* pass_data, gsize data_len, GError **error) {
-    return luks_resize (luks_device, size, pass_data, data_len, NULL, error);
 }
 
 /**
@@ -1739,7 +1525,19 @@ gboolean bd_crypto_luks_suspend (const gchar *luks_device, GError **error) {
     return TRUE;
 }
 
-static gboolean luks_resume (const gchar *luks_device, const guint8 *pass_data, gsize data_len, const gchar *key_file, GError **error) {
+/**
+ * bd_crypto_luks_resume:
+ * @luks_device: LUKS device to resume
+ * @pass_data: (array length=data_len) (allow-none): a passphrase for the LUKS device (may contain arbitrary binary data)
+ * @data_len: length of the @pass_data buffer
+ * @key_file: (allow-none): key file path to use for resuming the @device or %NULL
+ * @error: (out): place to store error (if any)
+ *
+ * Returns: whether the given @luks_device was successfully resumed or not
+ *
+ * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_SUSPEND_RESUME
+ */
+gboolean bd_crypto_luks_resume (const gchar *luks_device, const guint8 *pass_data, gsize data_len, const gchar *key_file, GError **error) {
     struct crypt_device *cd = NULL;
     gboolean success = FALSE;
     gchar *key_buffer = NULL;
@@ -1807,36 +1605,6 @@ static gboolean luks_resume (const gchar *luks_device, const guint8 *pass_data, 
     crypt_free (cd);
     bd_utils_report_finished (progress_id, "Completed");
     return TRUE;
-}
-
-/**
- * bd_crypto_luks_resume_blob:
- * @luks_device: LUKS device to resume
- * @pass_data: (array length=data_len): a passphrase for the LUKS device (may contain arbitrary binary data)
- * @data_len: length of the @pass_data buffer
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the given @luks_device was successfully resumed or not
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_SUSPEND_RESUME
- */
-gboolean bd_crypto_luks_resume_blob (const gchar *luks_device, const guint8 *pass_data, gsize data_len, GError **error) {
-    return luks_resume (luks_device, pass_data, data_len, NULL, error);
-}
-
-/**
- * bd_crypto_luks_resume:
- * @luks_device: LUKS device to resume
- * @passphrase: (allow-none): passphrase to resume the @device or %NULL
- * @key_file: (allow-none): key file path to use for resuming the @device or %NULL
- * @error: (out): place to store error (if any)
- *
- * Returns: whether the give @luks_device was successfully resumed or not
- *
- * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_SUSPEND_RESUME
- */
-gboolean bd_crypto_luks_resume (const gchar *luks_device, const gchar *passphrase, const gchar *key_file, GError **error) {
-    return luks_resume (luks_device, (guint8*) passphrase, passphrase ? strlen (passphrase) : 0, key_file, error);
 }
 
 /**
@@ -2016,10 +1784,8 @@ BDCryptoLUKSInfo* bd_crypto_luks_info (const gchar *luks_device, GError **error)
     version = crypt_get_type (cd);
     if (g_strcmp0 (version, CRYPT_LUKS1) == 0)
         info->version = BD_CRYPTO_LUKS_VERSION_LUKS1;
-#ifdef LIBCRYPTSETUP_2
     else if (g_strcmp0 (version, CRYPT_LUKS2) == 0)
         info->version = BD_CRYPTO_LUKS_VERSION_LUKS2;
-#endif
     else {
         g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
                      "Unknown or unsupported LUKS version");
@@ -2031,12 +1797,7 @@ BDCryptoLUKSInfo* bd_crypto_luks_info (const gchar *luks_device, GError **error)
     info->mode = g_strdup (crypt_get_cipher_mode (cd));
     info->uuid = g_strdup (crypt_get_uuid (cd));
     info->backing_device = g_strdup (crypt_get_device_name (cd));
-
-#ifdef LIBCRYPTSETUP_2
     info->sector_size = crypt_get_sector_size (cd);
-#else
-    info->sector_size = 0;
-#endif
 
     crypt_free (cd);
     return info;
@@ -2051,13 +1812,6 @@ BDCryptoLUKSInfo* bd_crypto_luks_info (const gchar *luks_device, GError **error)
  *
  * Tech category: %BD_CRYPTO_TECH_INTEGRITY%BD_CRYPTO_TECH_MODE_QUERY
  */
-#ifndef LIBCRYPTSETUP_2
-BDCryptoIntegrityInfo* bd_crypto_integrity_info (const gchar *device __attribute__((unused)), GError **error) {
-    g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
-                 "Integrity technology requires libcryptsetup >= 2.0");
-    return NULL;
-}
-#else
 BDCryptoIntegrityInfo* bd_crypto_integrity_info (const gchar *device, GError **error) {
     struct crypt_device *cd = NULL;
     struct crypt_params_integrity ip = ZERO_INIT;
@@ -2093,7 +1847,6 @@ BDCryptoIntegrityInfo* bd_crypto_integrity_info (const gchar *device, GError **e
     crypt_free (cd);
     return info;
 }
-#endif
 
 /* added in cryptsetup 2.4.0 */
 #ifndef crypt_token_max
@@ -2112,11 +1865,6 @@ static int crypt_token_max (const char *type __attribute__((unused))) {
  *
  * Tech category: %BD_CRYPTO_TECH_LUKS-%BD_CRYPTO_TECH_MODE_QUERY
  */
-#ifndef LIBCRYPTSETUP_2
-BDCryptoLUKSTokenInfo** bd_crypto_luks_token_info (const gchar *device __attribute__((unused)), GError **error) {
-    return NULL;
-}
-#else
 BDCryptoLUKSTokenInfo** bd_crypto_luks_token_info (const gchar *device, GError **error) {
     struct crypt_device *cd = NULL;
     GPtrArray *tokens = NULL;
@@ -2175,7 +1923,6 @@ BDCryptoLUKSTokenInfo** bd_crypto_luks_token_info (const gchar *device, GError *
     g_ptr_array_add (tokens, NULL);
     return (BDCryptoLUKSTokenInfo **) g_ptr_array_free (tokens, FALSE);
 }
-#endif
 
 /**
  * bd_crypto_keyring_add_key:
@@ -2346,17 +2093,8 @@ gboolean bd_crypto_tc_open_full (const gchar *device, const gchar *name, const g
     if (system)
         params.flags |= CRYPT_TCRYPT_SYSTEM_HEADER;
 
-#ifndef LIBCRYPTSETUP_2
-    if (veracrypt && veracrypt_pim != 0) {
-        g_set_error (error, BD_CRYPTO_ERROR, BD_CRYPTO_ERROR_TECH_UNAVAIL,
-                     "Compiled against a version of libcryptsetup that does not support the VeraCrypt PIM setting.");
-        bd_utils_report_finished (progress_id, (*error)->message);
-        return FALSE;
-    }
-#else
     if (veracrypt && veracrypt_pim != 0)
         params.veracrypt_pim = veracrypt_pim;
-#endif
 
     ret = crypt_load (cd, CRYPT_TCRYPT, &params);
     if (ret != 0) {

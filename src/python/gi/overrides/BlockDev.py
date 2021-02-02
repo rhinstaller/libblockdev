@@ -258,38 +258,73 @@ class CryptoLUKSExtra(BlockDev.CryptoLUKSExtra):
 CryptoLUKSExtra = override(CryptoLUKSExtra)
 __all__.append("CryptoLUKSExtra")
 
-# calling `crypto_luks_format_luks2` with `luks_version` set to
-# `BlockDev.CryptoLUKSVersion.LUKS1` and `extra` to `None` is the same
-# as using the "original" function `crypto_luks_format`
-_crypto_luks_format = BlockDev.crypto_luks_format_luks2
+_crypto_luks_format = BlockDev.crypto_luks_format
 @override(BlockDev.crypto_luks_format)
 def crypto_luks_format(device, cipher=None, key_size=0, passphrase=None, key_file=None, min_entropy=0, luks_version=BlockDev.CryptoLUKSVersion.LUKS1, extra=None):
-    return _crypto_luks_format(device, cipher, key_size, passphrase, key_file, min_entropy, luks_version, extra)
+    if passphrase:
+        pw = [ord(c) for c in passphrase]
+    else:
+        pw = None
+    return _crypto_luks_format(device, cipher, key_size, pw, key_file, min_entropy, luks_version, extra)
 __all__.append("crypto_luks_format")
 
 _crypto_luks_open = BlockDev.crypto_luks_open
 @override(BlockDev.crypto_luks_open)
 def crypto_luks_open(device, name, passphrase=None, key_file=None, read_only=False):
-    return _crypto_luks_open(device, name, passphrase, key_file, read_only)
+    if passphrase:
+        pw = [ord(c) for c in passphrase]
+    else:
+        pw = None
+    return _crypto_luks_open(device, name, pw, key_file, read_only)
 __all__.append("crypto_luks_open")
 
-_crypto_luks_resize = BlockDev.crypto_luks_resize_luks2
+_crypto_luks_resize = BlockDev.crypto_luks_resize
 @override(BlockDev.crypto_luks_resize)
 def crypto_luks_resize(luks_device, size=0, passphrase=None, key_file=None):
-    return _crypto_luks_resize(luks_device, size, passphrase, key_file)
+    if passphrase:
+        pw = [ord(c) for c in passphrase]
+    else:
+        pw = None
+    return _crypto_luks_resize(luks_device, size, pw, key_file)
 __all__.append("crypto_luks_resize")
 
 _crypto_luks_add_key = BlockDev.crypto_luks_add_key
 @override(BlockDev.crypto_luks_add_key)
 def crypto_luks_add_key(device, pass_=None, key_file=None, npass=None, nkey_file=None):
-    return _crypto_luks_add_key(device, pass_, key_file, npass, nkey_file)
+    if pass_:
+        pw = [ord(c) for c in pass_]
+    else:
+        pw = None
+    if npass:
+        npw = [ord(c) for c in npass]
+    else:
+        npw = None
+    return _crypto_luks_add_key(device, pw, key_file, npw, nkey_file)
 __all__.append("crypto_luks_add_key")
 
 _crypto_luks_remove_key = BlockDev.crypto_luks_remove_key
 @override(BlockDev.crypto_luks_remove_key)
 def crypto_luks_remove_key(device, pass_=None, key_file=None):
-    return _crypto_luks_remove_key(device, pass_, key_file)
+    if pass_:
+        pw = [ord(c) for c in pass_]
+    else:
+        pw = None
+    return _crypto_luks_remove_key(device, pw, key_file)
 __all__.append("crypto_luks_remove_key")
+
+_crypto_luks_change_key = BlockDev.crypto_luks_change_key
+@override(BlockDev.crypto_luks_change_key)
+def crypto_luks_change_key(device, pass_, npass):
+    if pass_:
+        pw = [ord(c) for c in pass_]
+    else:
+        pw = None
+    if npass:
+        npw = [ord(c) for c in npass]
+    else:
+        npw = None
+    return _crypto_luks_change_key(device, pw, npw)
+__all__.append("crypto_luks_change_key")
 
 _crypto_escrow_device = BlockDev.crypto_escrow_device
 @override(BlockDev.crypto_escrow_device)
@@ -300,7 +335,11 @@ __all__.append("crypto_escrow_device")
 _crypto_luks_resume = BlockDev.crypto_luks_resume
 @override(BlockDev.crypto_luks_resume)
 def crypto_luks_resume(device, passphrase=None, key_file=None):
-    return _crypto_luks_resume(device, passphrase, key_file)
+    if passphrase:
+        pw = [ord(c) for c in passphrase]
+    else:
+        pw = None
+    return _crypto_luks_resume(device, pw, key_file)
 __all__.append("crypto_luks_resume")
 
 _crypto_tc_open = BlockDev.crypto_tc_open_full
